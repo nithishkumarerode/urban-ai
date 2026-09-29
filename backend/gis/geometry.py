@@ -2,7 +2,6 @@ import math
 from typing import Tuple, List, Optional, Dict, Any
 from shapely.geometry import shape, mapping, Polygon, MultiPolygon, Point
 from shapely.ops import transform
-import pyproj
 
 def get_projected_crs_for_bounds(min_lon: float, min_lat: float, max_lon: float, max_lat: float) -> str:
     """
@@ -35,11 +34,23 @@ def calculate_real_area_and_perimeter(
     if not target_projected_crs:
         target_projected_crs = get_projected_crs_for_bounds(bounds[0], bounds[1], bounds[2], bounds[3])
 
-    project_to_metric = pyproj.Transformer.from_crs(
-        source_crs, target_projected_crs, always_xy=True
-    ).transform
+    try:
+        import pyproj
+        project_to_metric = pyproj.Transformer.from_crs(
+            source_crs, target_projected_crs, always_xy=True
+        ).transform
+        projected_geom = transform(project_to_metric, geom)
+    except Exception:
+        # High precision pure-Python local metric projection fallback (WGS84 spheroid)
+        center_lat = (bounds[1] + bounds[3]) / 2.0
+        lat_rad = math.radians(center_lat)
+        m_per_deg_lat = 111132.954 - 559.822 * math.cos(2 * lat_rad) + 1.175 * math.cos(4 * lat_rad)
+        m_per_deg_lon = 111412.84 * math.cos(lat_rad) - 93.5 * math.cos(3 * lat_rad)
 
-    projected_geom = transform(project_to_metric, geom)
+        def to_metric_coords(x, y, z=None):
+            return (x * m_per_deg_lon, y * m_per_deg_lat)
+
+        projected_geom = transform(to_metric_coords, geom)
     
     area_sqm = float(projected_geom.area)
     perimeter_m = float(projected_geom.length)

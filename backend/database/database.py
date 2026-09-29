@@ -1,18 +1,22 @@
 import os
+from dotenv import load_dotenv
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import declarative_base, sessionmaker
 
+load_dotenv()
+
 DATABASE_URL = os.getenv(
     "DATABASE_URL",
-    "postgresql+asyncpg://postgres:postgres_cadastral_secure_pass@localhost:5432/urbancadastral_db"
+    "sqlite+aiosqlite:///urbancadastral.db"
 )
 
 # Async engine for production FastAPI async endpoints
+is_sqlite = DATABASE_URL.startswith("sqlite")
 engine = create_async_engine(
     DATABASE_URL,
     echo=False,
     future=True,
-    pool_pre_ping=True
+    **({} if is_sqlite else {"pool_pre_ping": True})
 )
 
 AsyncSessionLocal = sessionmaker(

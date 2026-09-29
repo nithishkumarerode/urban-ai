@@ -1,7 +1,10 @@
 import os
 from typing import Dict, Any, Optional
 from shapely.geometry import box, mapping
-import pyproj
+try:
+    import pyproj
+except Exception:
+    pyproj = None
 
 def inspect_geotiff(file_path: str) -> Dict[str, Any]:
     """

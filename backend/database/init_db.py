@@ -1,11 +1,9 @@
 import asyncio
 import os
-from passlib.context import CryptContext
+import bcrypt
 from sqlalchemy import select
 from .database import engine, Base, AsyncSessionLocal
 from .models import User
-
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 TEST_USER_EMAIL = os.getenv("TEST_USER_EMAIL", "test@example.com")
 TEST_USER_PASSWORD = os.getenv("TEST_USER_PASSWORD", "AdminCadastral2026!")
@@ -22,7 +20,8 @@ async def init_db():
         user = result.scalars().first()
 
         if not user:
-            hashed_pwd = pwd_context.hash(TEST_USER_PASSWORD)
+            salt = bcrypt.gensalt()
+            hashed_pwd = bcrypt.hashpw(TEST_USER_PASSWORD.encode("utf-8"), salt).decode("utf-8")
             new_user = User(
                 email=TEST_USER_EMAIL,
                 hashed_password=hashed_pwd,

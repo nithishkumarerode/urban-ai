@@ -1,18 +1,89 @@
 import uuid
 from datetime import datetime
 from sqlalchemy import (
-    Column, Integer, String, Boolean, DateTime, Float, ForeignKey, Text, BigInteger, JSON
+    Column, Integer, String, Boolean, DateTime, Float, ForeignKey, Text, BigInteger, JSON, TypeDecorator, LargeBinary
 )
-from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import relationship
-from geoalchemy2 import Geometry
+from geoalchemy2.elements import WKBElement
 from .database import Base
+
+class SpatialGeometry(TypeDecorator):
+    """
+    Cross-dialect geometry type:
+    - PostgreSQL/PostGIS: compiles to GEOMETRY
+    - SQLite: compiles to BLOB (storing WKB)
+    Transparently serializes and deserializes WKBElement for Shapely to_shape/from_shape.
+    """
+    impl = LargeBinary
+    cache_ok = True
+
+    def __init__(self, geometry_type="GEOMETRY", srid=4326, **kwargs):
+        super().__init__()
+        self.geometry_type = geometry_type
+        self.srid = srid
+
+    def load_dialect_impl(self, dialect):
+        if dialect.name == "postgresql":
+            try:
+                from geoalchemy2 import Geometry
+                return dialect.type_descriptor(Geometry(geometry_type=self.geometry_type, srid=self.srid))
+            except ImportError:
+                pass
+        return dialect.type_descriptor(LargeBinary())
+
+    def process_bind_param(self, value, dialect):
+        if value is None:
+            return None
+        if hasattr(value, 'data'):
+            return bytes(value.data)
+        if isinstance(value, (bytes, bytearray)):
+            return bytes(value)
+        return value
+
+    def process_result_value(self, value, dialect):
+        if value is None:
+            return None
+        if hasattr(value, 'data'):
+            return value
+        return WKBElement(value, srid=self.srid)
+
+class GUID(TypeDecorator):
+    impl = String(36)
+    cache_ok = True
+
+    def load_dialect_impl(self, dialect):
+        if dialect.name == "postgresql":
+            from sqlalchemy.dialects.postgresql import UUID
+            return dialect.type_descriptor(UUID(as_uuid=True))
+        return dialect.type_descriptor(String(36))
+
+    def process_bind_param(self, value, dialect):
+        if value is None:
+            return None
+        return str(value)
+
+    def process_result_value(self, value, dialect):
+        if value is None:
+            return None
+        if isinstance(value, uuid.UUID):
+            return value
+        return uuid.UUID(str(value))
+
+class JSONType(TypeDecorator):
+    impl = JSON
+    cache_ok = True
+
+    def load_dialect_impl(self, dialect):
+        if dialect.name == "postgresql":
+            from sqlalchemy.dialects.postgresql import JSONB
+            return dialect.type_descriptor(JSONB())
+        return dialect.type_descriptor(JSON())
 
 class User(Base):
     __tablename__ = "users"
 
     id = Column(Integer, primary_key=True, index=True)
-    uuid = Column(UUID(as_uuid=True), default=uuid.uuid4, unique=True)
+    uuid = Column(GUID, default=uuid.uuid4, unique=True)
     email = Column(String(255), unique=True, index=True, nullable=False)
     hashed_password = Column(String(255), nullable=False)
     full_name = Column(String(255))
@@ -58,12 +129,12 @@ class RasterMetadata(Base):
     bands = Column(Integer, nullable=False)
     data_type = Column(String(50), nullable=False)
     crs = Column(String(100), nullable=True) # None when unprojected / missing
-    affine_transform = Column(JSONB, nullable=True)
+    affine_transform = Column(JSONType, nullable=True)
     bounds_min_x = Column(Float, nullable=True)
     bounds_min_y = Column(Float, nullable=True)
     bounds_max_x = Column(Float, nullable=True)
     bounds_max_y = Column(Float, nullable=True)
-    bounds_geom = Column(Geometry(geometry_type="POLYGON", srid=4326), nullable=True)
+    bounds_geom = Column(SpatialGeometry(geometry_type="POLYGON", srid=4326), nullable=True)
     resolution_x = Column(Float, nullable=True)
     resolution_y = Column(Float, nullable=True)
     gsd_cm = Column(Float, nullable=True) # None if unavailable
@@ -92,7 +163,7 @@ class Parcel(Base):
     id = Column(Integer, primary_key=True, index=True)
     parcel_identifier = Column(String(100), index=True, nullable=False)
     dataset_id = Column(Integer, ForeignKey("datasets.id", ondelete="SET NULL"), nullable=True)
-    geom = Column(Geometry(geometry_type="MULTIPOLYGON", srid=4326), nullable=False)
+    geom = Column(SpatialGeometry(geometry_type="MULTIPOLYGON", srid=4326), nullable=False)
     projected_srid = Column(Integer, default=3857)
     area_sqm = Column(Float, nullable=False)
     area_hectares = Column(Float, nullable=False)
@@ -114,7 +185,7 @@ class Building(Base):
     building_code = Column(String(100), nullable=True)
     dataset_id = Column(Integer, ForeignKey("datasets.id", ondelete="SET NULL"), nullable=True)
     parcel_id = Column(Integer, ForeignKey("parcels.id", ondelete="SET NULL"), nullable=True)
-    geom = Column(Geometry(geometry_type="MULTIPOLYGON", srid=4326), nullable=False)
+    geom = Column(SpatialGeometry(geometry_type="MULTIPOLYGON", srid=4326), nullable=False)
     area_sqm = Column(Float, nullable=False)
     estimated_height_m = Column(Float, nullable=True)
     ai_confidence = Column(Float, nullable=True)
@@ -131,8 +202,8 @@ class Road(Base):
     id = Column(Integer, primary_key=True, index=True)
     road_identifier = Column(String(100), nullable=True)
     dataset_id = Column(Integer, ForeignKey("datasets.id", ondelete="SET NULL"), nullable=True)
-    geom = Column(Geometry(geometry_type="MULTILINESTRING", srid=4326), nullable=False)
-    buffer_geom = Column(Geometry(geometry_type="MULTIPOLYGON", srid=4326), nullable=True)
+    geom = Column(SpatialGeometry(geometry_type="MULTILINESTRING", srid=4326), nullable=False)
+    buffer_geom = Column(SpatialGeometry(geometry_type="MULTIPOLYGON", srid=4326), nullable=True)
     length_m = Column(Float, nullable=False)
     buffer_width_m = Column(Float, default=12.0)
     ai_confidence = Column(Float, nullable=True)
@@ -148,7 +219,7 @@ class LandUse(Base):
     dataset_id = Column(Integer, ForeignKey("datasets.id", ondelete="CASCADE"), nullable=False)
     class_code = Column(Integer, nullable=False) # 0=Background, 1=Building, 2=Road, 3=Veg, 4=Water, 5=Open
     class_name = Column(String(50), nullable=False)
-    geom = Column(Geometry(geometry_type="MULTIPOLYGON", srid=4326), nullable=False)
+    geom = Column(SpatialGeometry(geometry_type="MULTIPOLYGON", srid=4326), nullable=False)
     area_sqm = Column(Float, nullable=False)
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
 
@@ -179,8 +250,8 @@ class VerificationTask(Base):
     dataset_id = Column(Integer, ForeignKey("datasets.id", ondelete="CASCADE"), nullable=False)
     status = Column(String(50), default="Pending")
     assigned_user_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
-    original_geometry = Column(JSONB, nullable=True)
-    edited_geometry = Column(JSONB, nullable=True)
+    original_geometry = Column(JSONType, nullable=True)
+    edited_geometry = Column(JSONType, nullable=True)
     rejection_reason = Column(Text, nullable=True)
     notes = Column(Text, nullable=True)
     reviewed_at = Column(DateTime(timezone=True), nullable=True)
@@ -194,7 +265,7 @@ class ChangeDetection(Base):
     dataset_b_id = Column(Integer, ForeignKey("datasets.id", ondelete="CASCADE"), nullable=False)
     change_type = Column(String(100), nullable=False)
     description = Column(Text, nullable=False)
-    geom = Column(Geometry(geometry_type="MULTIPOLYGON", srid=4326), nullable=True)
+    geom = Column(SpatialGeometry(geometry_type="MULTIPOLYGON", srid=4326), nullable=True)
     area_shift_sqm = Column(Float, nullable=True)
     severity = Column(String(50), default="MODERATE")
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
@@ -208,6 +279,6 @@ class AuditLog(Base):
     action = Column(String(100), nullable=False)
     entity_type = Column(String(50), nullable=True)
     entity_id = Column(String(100), nullable=True)
-    details = Column(JSONB, nullable=True)
+    details = Column(JSONType, nullable=True)
     ip_address = Column(String(45), nullable=True)
     timestamp = Column(DateTime(timezone=True), default=datetime.utcnow)

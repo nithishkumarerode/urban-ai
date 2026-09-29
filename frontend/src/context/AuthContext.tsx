@@ -3,7 +3,7 @@ import { api } from '../services/api';
 import { User, AuthState } from '../types';
 
 interface AuthContextType extends AuthState {
-  login: (email: string, password: str) => Promise<void>;
+  login: (email: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
 }
 
@@ -29,7 +29,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setIsLoading(false);
   }, []);
 
-  const login = async (email: string, password: str) => {
+  const login = async (email: string, password: string) => {
     const response = await api.post('/auth/login', { email, password });
     const { access_token, user_email, user_name, role } = response.data;
 
