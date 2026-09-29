@@ -1,0 +1,6 @@
+{
+  "name": "UrbanCadastral AI",
+  "description": "Professional government-grade AI-powered urban cadastral and land-intelligence platform for drone imagery, feature extraction, parcel boundaries, GIS maps, conflict detection, and CORS ground-truth survey verification.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

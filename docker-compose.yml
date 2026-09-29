@@ -1,0 +1,61 @@
+version: '3.8'
+
+services:
+  # 1. PostgreSQL 16 with PostGIS 3.4 Spatial Database
+  db:
+    image: postgis/postgis:16-3.4
+    container_name: urbancadastral_postgis
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres_cadastral_secure_pass
+      POSTGRES_DB: urbancadastral_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./database/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d urbancadastral_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # 2. FastAPI Python Backend Service with GIS & AI Inference
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: urbancadastral_backend
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file:
+      - .env.example
+    environment:
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres_cadastral_secure_pass@db:5432/urbancadastral_db
+      AI_MODEL_PATH: /app/backend/models/weights/cadastral_segmentation.onnx
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data
+      - ./backend/models/weights:/app/backend/models/weights
+    command: uvicorn backend.main:app --host 0.0.0.0 --port 8000 --reload
+
+  # 3. React / Vite / TypeScript Frontend
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: urbancadastral_frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "5173:5173"
+    environment:
+      - VITE_API_URL=http://localhost:8000/api
+
+volumes:
+  postgres_data:
